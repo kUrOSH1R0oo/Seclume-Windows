@@ -91,6 +91,8 @@ Use backslashes (`\`) for file paths on Windows (e.g., `dir\file.txt`).
 | `-ca`, `--compression-algo (zlib, lzma)` | Set compression algorithm (default = lzma). |
 | `-cl`, `--compression-level <0-9>` | Set compression level (0 = no, 9 = max, default = 1). |
 | `-wk`, `--weak-password` | Allows weak passwords in archive mode (NOT RECOMMENDED). |
+| `-o`, `--output-dir <dir>` | Specify output directory for extraction (archive/extract modes). |
+| `-x`, `--exclude <patterns>` | Comma-separated file patterns to exclude during archiving (e.g., *.log,*.txt). |
 
 ### Modes
 
@@ -111,7 +113,7 @@ seclume [options] archive <archive.slm> <password> <file1> [file2 ...]
   - Encrypts file data, metadata, and comments using AES-256-GCM.
   - Generates a random salt and nonces for encryption.
   - Computes an HMAC-SHA256 for the archive header.
-- **Options Supported**: `-f`, `-c`, `-d`, `-vv`, `-ca`, `-cl`, `-wk`.
+- **Options Supported**: `-f`, `-c`, `-d`, `-vv`, `-ca`, `-cl`, `-wk`, `-o`, `-x`.
 
 #### Extract Mode
 
@@ -128,7 +130,7 @@ seclume [options] extract <archive.slm> <password>
   - Decrypts metadata and file data using AES-256-GCM.
   - Decompresses file data using zlib or lzma.
   - Creates parent directories as needed using Windows `_mkdir`.
-- **Options Supported**: `-f`, `-vc`, `-vv`.
+- **Options Supported**: `-f`, `-vc`, `-vv`, `-o`.
 
 #### List Mode
 
@@ -202,6 +204,21 @@ seclume -vc list <archive.slm> <password>
    seclume -wk archive output.slm mypassword file1.txt
    ```
    Forces Seclume to use a weak password.
+
+8. **Placing the archive file in a different directory**:
+
+   ```cmd
+   seclume -o C:\path\to\directory archive output.slm mypassWORD123! file1.txt C:\data\dir
+   ```
+
+   The `.slm` file is generated in the same directory where you run Seclume. But, when extracting it, the extracted files will be placed in the directory you specify.
+
+9. **Excluding a specific file-type when archiving**:
+   ```cmd
+   seclume -x *.log archive output.slm mypassWORD123! C:\data\dir
+   ```
+
+   It will skip all `.log` files when creating the archive.
 
 ## Security Features
 
@@ -432,7 +449,7 @@ Verbose mode (`-vv`) provides additional debug output, including file data snipp
 
 Report bugs to **lone_kuroshiro@protonmail.com**. Include:
 
-- Seclume version (1.0.3).
+- Seclume version (1.0.5).
 - Steps to reproduce the issue.
 - Relevant error messages or logs (use `-vv` for detailed output).
 

@@ -15,21 +15,22 @@
 VerbosityLevel verbosity = VERBOSE_BASIC;
 
 /**
- * @brief Converts POSIX file mode to a string representation (e.g., "rw-r--r--").
+ * @brief Converts POSIX file mode to a string representation (e.g., "drw-r--r--").
  * @param mode POSIX file mode (st_mode).
- * @param str Output buffer (must be at least 11 bytes for "rwxrwxrwx\0").
+ * @param str Output buffer (must be at least 11 bytes for "drwxrwxrwx\0").
  */
 void mode_to_string(uint32_t mode, char *str) {
-    str[0] = (mode & S_IRUSR) ? 'r' : '-';
-    str[1] = (mode & S_IWUSR) ? 'w' : '-';
-    str[2] = (mode & S_IXUSR) ? 'x' : '-';
-    str[3] = (mode & S_IRGRP) ? 'r' : '-';
-    str[4] = (mode & S_IWGRP) ? 'w' : '-';
-    str[5] = (mode & S_IXGRP) ? 'x' : '-';
-    str[6] = (mode & S_IROTH) ? 'r' : '-';
-    str[7] = (mode & S_IWOTH) ? 'w' : '-';
-    str[8] = (mode & S_IXOTH) ? 'x' : '-';
-    str[9] = '\0';
+    str[0] = (S_ISDIR(mode)) ? 'd' : '-';
+    str[1] = (mode & S_IRUSR) ? 'r' : '-';
+    str[2] = (mode & S_IWUSR) ? 'w' : '-';
+    str[3] = (mode & S_IXUSR) ? 'x' : '-';
+    str[4] = (mode & S_IRGRP) ? 'r' : '-';
+    str[5] = (mode & S_IWGRP) ? 'w' : '-';
+    str[6] = (mode & S_IXGRP) ? 'x' : '-';
+    str[7] = (mode & S_IROTH) ? 'r' : '-';
+    str[8] = (mode & S_IWOTH) ? 'w' : '-';
+    str[9] = (mode & S_IXOTH) ? 'x' : '-';
+    str[10] = '\0';
 }
 
 /**
@@ -142,4 +143,36 @@ int check_password_strength(const char *password, int weak_password) {
     }
     verbose_print(VERBOSE_BASIC, "Warning: Password is weak (lacks variety). Include lowercase, uppercase, digits, and special characters.");
     return 0;
+}
+
+/**
+ * @brief Checks if a filename matches a glob pattern (Windows-compatible).
+ * @param filename Filename to check.
+ * @param pattern Glob pattern (e.g., "*.log").
+ * @return 1 if the filename matches the pattern, 0 otherwise.
+ */
+int matches_glob_pattern(const char *filename, const char *pattern) {
+    if (!filename || !pattern) return 0;
+    const char *f = filename;
+    const char *p = pattern;
+    while (*f && *p) {
+        if (*p == '*') {
+            p++;
+            if (!*p) return 1; // * at end matches rest
+            while (*f) {
+                if (matches_glob_pattern(f, p)) return 1;
+                f++;
+            }
+            return 0;
+        } else if (*p == '?') {
+            f++;
+            p++;
+        } else if (*f == *p || (*f == '\\' && *p == '/')) {
+            f++;
+            p++;
+        } else {
+            return 0;
+        }
+    }
+    return *f == '\0' && *p == '\0';
 }

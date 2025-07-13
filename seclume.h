@@ -41,6 +41,8 @@
 #define HMAC_SIZE 32
 /** @brief Maximum length of archive comment (including encryption overhead) */
 #define MAX_COMMENT 512
+/** @brief Maximum length of output directory (including encryption overhead) */
+#define MAX_OUTDIR 512
 
 /**
  * @brief Compression algorithm types.
@@ -55,14 +57,16 @@ typedef enum {
  */
 typedef struct {
     char magic[8];           /**< Magic string "SLM" identifying the archive format */
-    uint8_t version;         /**< Archive format version (4 for LZMA, 5 for zlib/LZMA with algo field) */
+    uint8_t version;         /**< Archive format version (4 for LZMA, 5 for zlib/LZMA, 6 for output dir) */
     uint32_t file_count;     /**< Number of files in the archive */
     uint8_t compression_level; /**< Compression level (0-9) */
     uint8_t compression_algo; /**< Compression algorithm (0 = zlib, 1 = LZMA) */
     uint8_t reserved[2];     /**< Reserved for future use (zeroed) */
     uint32_t comment_len;    /**< Length of encrypted comment */
+    uint32_t outdir_len;     /**< Length of encrypted output directory (version 6) */
     uint8_t salt[SALT_SIZE]; /**< Random salt for PBKDF2 key derivation */
     uint8_t comment[MAX_COMMENT]; /**< Encrypted comment (includes nonce and tag) */
+    uint8_t outdir[MAX_OUTDIR];  /**< Encrypted output directory (includes nonce and tag, version 6) */
     uint8_t hmac[HMAC_SIZE]; /**< HMAC-SHA256 of header (excluding this field) */
 } ArchiveHeader;
 
@@ -104,6 +108,7 @@ int derive_key(const char *password, const uint8_t *salt, uint8_t *key, const ch
 int compute_hmac(const uint8_t *key, const uint8_t *data, size_t data_len, uint8_t *hmac);
 int has_path_traversal(const char *path);
 int check_password_strength(const char *password, int weak_password);
+int matches_glob_pattern(const char *filename, const char *pattern);
 
 /* Function prototypes from compression.c */
 size_t compress_data(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max, int level, CompressionAlgo algo);
@@ -121,10 +126,11 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
 
 /* Function prototypes from archive.c */
 int archive_files(const char *output, const char **filenames, int file_count, const char *password,
-                 int force, int compression_level, CompressionAlgo compression_algo, const char *comment, int dry_run, int weak_password);
+                 int force, int compression_level, CompressionAlgo compression_algo, const char *comment,
+                 int dry_run, int weak_password, const char *outdir, const char *exclude);
 
 /* Function prototypes from extract.c */
-int extract_files(const char *archive, const char *password, int force);
+int extract_files(const char *archive, const char *password, int force, const char *outdir);
 
 /* Function prototypes from list.c */
 int list_files(const char *archive, const char *password);
@@ -132,7 +138,7 @@ int list_files(const char *archive, const char *password);
 /* Function prototypes from view_comment.c */
 int view_comment(const char *archive, const char *password);
 
-/* Function prototype from seclume_main.c */
+/* Function prototypes from seclume_main.c */
 void print_help(const char *prog_name);
 
 #endif /* SECLUME_H */
