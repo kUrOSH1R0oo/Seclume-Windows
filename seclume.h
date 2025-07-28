@@ -122,7 +122,7 @@ int decrypt_aes_gcm(const uint8_t *key, const uint8_t *nonce, const uint8_t *in,
 
 /* Function prototypes from file_ops.c */
 int create_parent_dirs(const char *filepath);
-int collect_files(const char *path, char ***file_list, int *file_count, int max_files);
+int collect_files(const char *path, char ***file_list, int *file_count, int max_files, const char **exclude_patterns, int exclude_pattern_count);
 
 /* Function prototypes from archive.c */
 int archive_files(const char *output, const char **filenames, int file_count, const char *password,

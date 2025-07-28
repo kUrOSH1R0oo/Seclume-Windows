@@ -213,25 +213,82 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         int file_count = 0;
+        // Parse exclude patterns
+        const char **exclude_patterns = NULL;
+        int exclude_pattern_count = 0;
+        char *exclude_copy = NULL;
+        if (exclude) {
+            exclude_copy = strdup(exclude);
+            if (!exclude_copy) {
+                fprintf(stderr, "Error: Memory allocation failed for exclude patterns\n");
+                for (int j = 0; j < file_count; j++) free(file_list[j]);
+                free(file_list);
+                return 1;
+            }
+            exclude_pattern_count = 1;
+            for (char *p = exclude_copy; *p; p++) {
+                if (*p == ',') exclude_pattern_count++;
+            }
+            exclude_patterns = malloc(exclude_pattern_count * sizeof(char *));
+            if (!exclude_patterns) {
+                fprintf(stderr, "Error: Memory allocation failed for exclude patterns array\n");
+                free(exclude_copy);
+                for (int j = 0; j < file_count; j++) free(file_list[j]);
+                free(file_list);
+                return 1;
+            }
+            int i = 0;
+            char *pattern = strtok(exclude_copy, ",");
+            while (pattern) {
+                exclude_patterns[i++] = pattern;
+                pattern = strtok(NULL, ",");
+            }
+        }
         for (int i = optind + 3; i < argc; i++) {
             struct stat st;
             if (stat(argv[i], &st) != 0) {
                 fprintf(stderr, "Error: Cannot stat %s: %s\n", argv[i], strerror(errno));
                 for (int j = 0; j < file_count; j++) free(file_list[j]);
                 free(file_list);
+                if (exclude_patterns) {
+                    free((char *)exclude_patterns[0]); // Free exclude_copy
+                    free(exclude_patterns);
+                }
                 return 1;
             }
             if (S_ISDIR(st.st_mode)) {
-                if (collect_files(argv[i], &file_list, &file_count, MAX_FILES) != 0) {
+                if (collect_files(argv[i], &file_list, &file_count, MAX_FILES, exclude_patterns, exclude_pattern_count) != 0) {
                     for (int j = 0; j < file_count; j++) free(file_list[j]);
                     free(file_list);
+                    if (exclude_patterns) {
+                        free((char *)exclude_patterns[0]); // Free exclude_copy
+                        free(exclude_patterns);
+                    }
                     return 1;
                 }
             } else if (S_ISREG(st.st_mode)) {
+                const char *filename = strrchr(argv[i], '/');
+#ifdef _WIN32
+                if (!filename) filename = strrchr(argv[i], '\\');
+#endif
+                filename = filename ? filename + 1 : argv[i];
+                int exclude = 0;
+                for (int j = 0; j < exclude_pattern_count; j++) {
+                    if (matches_glob_pattern(filename, exclude_patterns[j])) {
+                        verbose_print(VERBOSE_BASIC, "Excluding file: %s (matches pattern %s)", argv[i], exclude_patterns[j]);
+                        exclude = 1;
+                        break;
+                    }
+                }
+                if (exclude) continue;
                 if (file_count >= MAX_FILES) {
                     fprintf(stderr, "Error: Too many files (max %d)\n", MAX_FILES);
                     for (int j = 0; j < file_count; j++) free(file_list[j]);
                     free(file_list);
+                    if (exclude_patterns) {
+                        free((char *)exclude_patterns[0]); // Free exclude_copy
+                        free(exclude_patterns);
+                    }
                     return 1;
                 }
                 file_list[file_count] = strdup(argv[i]);
@@ -239,6 +296,10 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "Error: Memory allocation failed for file path\n");
                     for (int j = 0; j < file_count; j++) free(file_list[j]);
                     free(file_list);
+                    if (exclude_patterns) {
+                        free((char *)exclude_patterns[0]); // Free exclude_copy
+                        free(exclude_patterns);
+                    }
                     return 1;
                 }
                 file_count++;
@@ -247,8 +308,25 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Error: %s is not a regular file or directory\n", argv[i]);
                 for (int j = 0; j < file_count; j++) free(file_list[j]);
                 free(file_list);
+                if (exclude_patterns) {
+                    free((char *)exclude_patterns[0]); // Free exclude_copy
+                    free(exclude_patterns);
+                }
                 return 1;
             }
+        }
+        if (exclude_patterns) {
+            free((char *)exclude_patterns[0]); // Free exclude_copy
+            free(exclude_patterns);
+        }
+        verbose_print(VERBOSE_DEBUG, "Total files to archive: %d", file_count);
+        for (int i = 0; i < file_count; i++) {
+            verbose_print(VERBOSE_DEBUG, "File %d: %s", i, file_list[i]);
+        }
+        if (file_count == 0) {
+            fprintf(stderr, "Error: No files to archive after applying exclusions\n");
+            free(file_list);
+            return 1;
         }
         int result = archive_files(archive, (const char **)file_list, file_count, password, force,
                                   compression_level, compression_algo, comment, dry_run, weak_password,

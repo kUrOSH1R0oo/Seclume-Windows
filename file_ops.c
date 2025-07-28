@@ -93,14 +93,16 @@ int create_parent_dirs(const char *filepath) {
 }
 
 /**
- * @brief Recursively collects files from a directory or adds a single file.
+ * @brief Recursively collects files from a directory or adds a single file, excluding specified patterns.
  * @param path File or directory path to process.
  * @param file_list Pointer to array of file paths (allocated and filled).
  * @param file_count Pointer to the number of files collected.
  * @param max_files Maximum number of files allowed.
+ * @param exclude_patterns Array of exclusion patterns (e.g., "*.log").
+ * @param exclude_pattern_count Number of exclusion patterns.
  * @return 0 on success, 1 on failure.
  */
-int collect_files(const char *path, char ***file_list, int *file_count, int max_files) {
+int collect_files(const char *path, char ***file_list, int *file_count, int max_files, const char **exclude_patterns, int exclude_pattern_count) {
     if (!path || !file_list || !file_count || max_files <= 0) {
         fprintf(stderr, "Error: Invalid collect_files parameters\n");
         return 1;
@@ -123,13 +125,22 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
     normalize_path(path, normalized_path, path_len + 1);
 
 #ifdef _WIN32
-    struct stat st;
-    if (stat(normalized_path, &st) != 0) {
+    struct _stat64 st;
+    if (_stat64(normalized_path, &st) != 0) {
         fprintf(stderr, "Error: Cannot stat path %s: %s\n", normalized_path, strerror(errno));
         free(normalized_path);
         return 1;
     }
     if (!(st.st_mode & _S_IFDIR)) {
+        const char *filename = strrchr(normalized_path, '\\');
+        filename = filename ? filename + 1 : normalized_path;
+        for (int i = 0; i < exclude_pattern_count; i++) {
+            if (matches_glob_pattern(filename, exclude_patterns[i])) {
+                verbose_print(VERBOSE_BASIC, "Excluding file: %s (matches pattern %s)", normalized_path, exclude_patterns[i]);
+                free(normalized_path);
+                return 0;
+            }
+        }
         *file_list = malloc(sizeof(char *));
         if (!*file_list) {
             fprintf(stderr, "Error: Memory allocation failed for file list\n");
@@ -145,6 +156,7 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
             return 1;
         }
         *file_count = 1;
+        verbose_print(VERBOSE_DEBUG, "Collected file: %s", normalized_path);
         free(normalized_path);
         return 0;
     }
@@ -158,6 +170,7 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
         return 1;
     }
     snprintf(search_path, search_path_len, "%s\\*", normalized_path);
+    verbose_print(VERBOSE_DEBUG, "Searching directory: %s", search_path);
     HANDLE hFind = FindFirstFile(search_path, &ffd);
     free(search_path);
     if (hFind == INVALID_HANDLE_VALUE) {
@@ -210,6 +223,7 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
             return 1;
         }
         snprintf(full_path, full_path_len, "%s\\%s", normalized_path, ffd.cFileName);
+        verbose_print(VERBOSE_DEBUG, "Processing path: %s", full_path);
 
         if (has_path_traversal(full_path)) {
             fprintf(stderr, "Error: Path traversal detected in %s\n", full_path);
@@ -225,7 +239,8 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
         if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             char **subdir_list = NULL;
             int subdir_count = 0;
-            if (collect_files(full_path, &subdir_list, &subdir_count, max_files - *file_count) != 0) {
+            verbose_print(VERBOSE_DEBUG, "Entering subdirectory: %s", full_path);
+            if (collect_files(full_path, &subdir_list, &subdir_count, max_files - *file_count, exclude_patterns, exclude_pattern_count) != 0) {
                 free(full_path);
                 for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
                 free(*file_list);
@@ -251,66 +266,95 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
                 (*file_count)++;
             }
             free(subdir_list);
+            free(full_path);
         } else {
-            if (*file_count >= max_files) {
-                fprintf(stderr, "Error: Too many files (max %d)\n", max_files);
-                free(full_path);
-                for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
-                free(*file_list);
-                *file_list = NULL;
-                FindClose(hFind);
-                free(normalized_path);
-                return 1;
+            int exclude = 0;
+            for (int i = 0; i < exclude_pattern_count; i++) {
+                if (matches_glob_pattern(ffd.cFileName, exclude_patterns[i])) {
+                    verbose_print(VERBOSE_BASIC, "Excluding file: %s (matches pattern %s)", full_path, exclude_patterns[i]);
+                    exclude = 1;
+                    break;
+                }
             }
-            (*file_list)[*file_count] = strdup(full_path);
-            if (!(*file_list)[*file_count]) {
-                fprintf(stderr, "Error: Memory allocation failed for file path\n");
-                free(full_path);
-                for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
-                free(*file_list);
-                *file_list = NULL;
-                FindClose(hFind);
-                free(normalized_path);
-                return 1;
+            if (!exclude) {
+                if (*file_count >= max_files) {
+                    fprintf(stderr, "Error: Too many files (max %d)\n", max_files);
+                    free(full_path);
+                    for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
+                    free(*file_list);
+                    *file_list = NULL;
+                    FindClose(hFind);
+                    free(normalized_path);
+                    return 1;
+                }
+                (*file_list)[*file_count] = strdup(full_path);
+                if (!(*file_list)[*file_count]) {
+                    fprintf(stderr, "Error: Memory allocation failed for file path\n");
+                    free(full_path);
+                    for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
+                    free(*file_list);
+                    *file_list = NULL;
+                    FindClose(hFind);
+                    free(normalized_path);
+                    return 1;
+                }
+                verbose_print(VERBOSE_DEBUG, "Collected file: %s", full_path);
+                (*file_count)++;
             }
-            (*file_count)++;
+            free(full_path);
         }
-        free(full_path);
     } while (FindNextFile(hFind, &ffd) != 0);
     FindClose(hFind);
     free(normalized_path);
 #else
     struct stat st;
-    if (stat(path, &st) != 0) {
-        fprintf(stderr, "Error: Cannot stat path %s: %s\n", path, strerror(errno));
+    if (stat(normalized_path, &st) != 0) {
+        fprintf(stderr, "Error: Cannot stat path %s: %s\n", normalized_path, strerror(errno));
+        free(normalized_path);
         return 1;
     }
     if (!S_ISDIR(st.st_mode)) {
+        const char *filename = strrchr(normalized_path, '/');
+        filename = filename ? filename + 1 : normalized_path;
+        for (int i = 0; i < exclude_pattern_count; i++) {
+            if (matches_glob_pattern(filename, exclude_patterns[i])) {
+                verbose_print(VERBOSE_BASIC, "Excluding file: %s (matches pattern %s)", normalized_path, exclude_patterns[i]);
+                free(normalized_path);
+                return 0;
+            }
+        }
         *file_list = malloc(sizeof(char *));
         if (!*file_list) {
             fprintf(stderr, "Error: Memory allocation failed for file list\n");
+            free(normalized_path);
             return 1;
         }
-        (*file_list)[0] = strdup(path);
+        (*file_list)[0] = strdup(normalized_path);
         if (!(*file_list)[0]) {
             fprintf(stderr, "Error: Memory allocation failed for file path\n");
             free(*file_list);
             *file_list = NULL;
+            free(normalized_path);
             return 1;
         }
         *file_count = 1;
+        verbose_print(VERBOSE_DEBUG, "Collected file: %s", normalized_path);
+        free(normalized_path);
         return 0;
     }
     // Directory: use opendir/readdir
-    DIR *dir = opendir(path);
+    DIR *dir = opendir(normalized_path);
     if (!dir) {
-        fprintf(stderr, "Error: Cannot open directory %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "Error: Cannot open directory %s: %s\n", normalized_path, strerror(errno));
+        free(normalized_path);
         return 1;
     }
+    verbose_print(VERBOSE_DEBUG, "Searching directory: %s", normalized_path);
     *file_list = malloc(max_files * sizeof(char *));
     if (!*file_list) {
         fprintf(stderr, "Error: Memory allocation failed for file list\n");
         closedir(dir);
+        free(normalized_path);
         return 1;
     }
     struct dirent *entry;
@@ -325,6 +369,7 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
             free(*file_list);
             *file_list = NULL;
             closedir(dir);
+            free(normalized_path);
             return 1;
         }
 
@@ -332,11 +377,12 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
         size_t full_path_len = path_len + name_len + 2; // +2 for '/' and null terminator
         if (full_path_len >= MAX_PATH_LENGTH) {
             fprintf(stderr, "Error: Path too long: %s/%s (max %d bytes)\n",
-                    path, entry->d_name, MAX_PATH_LENGTH - 1);
+                    normalized_path, entry->d_name, MAX_PATH_LENGTH - 1);
             for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
             free(*file_list);
             *file_list = NULL;
             closedir(dir);
+            free(normalized_path);
             return 1;
         }
 
@@ -347,9 +393,11 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
             free(*file_list);
             *file_list = NULL;
             closedir(dir);
+            free(normalized_path);
             return 1;
         }
-        snprintf(full_path, full_path_len, "%s/%s", path, entry->d_name);
+        snprintf(full_path, full_path_len, "%s/%s", normalized_path, entry->d_name);
+        verbose_print(VERBOSE_DEBUG, "Processing path: %s", full_path);
 
         if (has_path_traversal(full_path)) {
             fprintf(stderr, "Error: Path traversal detected in %s\n", full_path);
@@ -358,18 +406,33 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
             free(*file_list);
             *file_list = NULL;
             closedir(dir);
+            free(normalized_path);
             return 1;
         }
 
-        if (S_ISDIR(st.st_mode)) {
+        struct stat entry_st;
+        if (stat(full_path, &entry_st) != 0) {
+            fprintf(stderr, "Error: Cannot stat %s: %s\n", full_path, strerror(errno));
+            free(full_path);
+            for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
+            free(*file_list);
+            *file_list = NULL;
+            closedir(dir);
+            free(normalized_path);
+            return 1;
+        }
+
+        if (S_ISDIR(entry_st.st_mode)) {
             char **subdir_list = NULL;
             int subdir_count = 0;
-            if (collect_files(full_path, &subdir_list, &subdir_count, max_files - *file_count) != 0) {
+            verbose_print(VERBOSE_DEBUG, "Entering subdirectory: %s", full_path);
+            if (collect_files(full_path, &subdir_list, &subdir_count, max_files - *file_count, exclude_patterns, exclude_pattern_count) != 0) {
                 free(full_path);
                 for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
                 free(*file_list);
                 *file_list = NULL;
                 closedir(dir);
+                free(normalized_path);
                 return 1;
             }
             for (int i = 0; i < subdir_count; i++) {
@@ -382,37 +445,54 @@ int collect_files(const char *path, char ***file_list, int *file_count, int max_
                     *file_list = NULL;
                     free(full_path);
                     closedir(dir);
+                    free(normalized_path);
                     return 1;
                 }
                 (*file_list)[*file_count] = subdir_list[i];
                 (*file_count)++;
             }
             free(subdir_list);
+            free(full_path);
         } else {
-            if (*file_count >= max_files) {
-                fprintf(stderr, "Error: Too many files (max %d)\n", max_files);
-                free(full_path);
-                for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
-                free(*file_list);
-                *file_list = NULL;
-                closedir(dir);
-                return 1;
+            int exclude = 0;
+            for (int i = 0; i < exclude_pattern_count; i++) {
+                if (matches_glob_pattern(entry->d_name, exclude_patterns[i])) {
+                    verbose_print(VERBOSE_BASIC, "Excluding file: %s (matches pattern %s)", full_path, exclude_patterns[i]);
+                    exclude = 1;
+                    break;
+                }
             }
-            (*file_list)[*file_count] = strdup(full_path);
-            if (!(*file_list)[*file_count]) {
-                fprintf(stderr, "Error: Memory allocation failed for file path\n");
-                free(full_path);
-                for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
-                free(*file_list);
-                *file_list = NULL;
-                closedir(dir);
-                return 1;
+            if (!exclude) {
+                if (*file_count >= max_files) {
+                    fprintf(stderr, "Error: Too many files (max %d)\n", max_files);
+                    free(full_path);
+                    for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
+                    free(*file_list);
+                    *file_list = NULL;
+                    closedir(dir);
+                    free(normalized_path);
+                    return 1;
+                }
+                (*file_list)[*file_count] = strdup(full_path);
+                if (!(*file_list)[*file_count]) {
+                    fprintf(stderr, "Error: Memory allocation failed for file path\n");
+                    free(full_path);
+                    for (int i = 0; i < *file_count; i++) free((*file_list)[i]);
+                    free(*file_list);
+                    *file_list = NULL;
+                    closedir(dir);
+                    free(normalized_path);
+                    return 1;
+                }
+                verbose_print(VERBOSE_DEBUG, "Collected file: %s", full_path);
+                (*file_count)++;
             }
-            (*file_count)++;
+            free(full_path);
         }
-        free(full_path);
     }
     closedir(dir);
+    free(normalized_path);
 #endif
+    verbose_print(VERBOSE_DEBUG, "Total files collected from %s: %d", path, *file_count);
     return 0;
 }
