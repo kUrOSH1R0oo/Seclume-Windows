@@ -231,15 +231,53 @@ int archive_files(const char *output, const char **filenames, int file_count, co
         }
         size_t in_size = st.st_size;
         uint32_t file_mode = st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO);
+        verbose_print(VERBOSE_DEBUG, "File size: %lu bytes, mode: 0%o", in_size, file_mode);
+        
+        // Handle empty files
         if (in_size == 0) {
-            fprintf(stderr, "Error: Input file %s is empty\n", filename);
-            secure_zero(file_key, AES_KEY_SIZE);
-            secure_zero(meta_key, AES_KEY_SIZE);
+            verbose_print(VERBOSE_BASIC, "Encrypting empty file: %s", filename);
+            FileEntryPlain plain_entry = { .compressed_size = 0, .original_size = 0, .mode = file_mode, .reserved = 0 };
+            strncpy(plain_entry.filename, filename, MAX_FILENAME - 1);
+            plain_entry.filename[MAX_FILENAME - 1] = '\0';
+            uint8_t meta_nonce[AES_NONCE_SIZE];
+            if (!dry_run && RAND_bytes(meta_nonce, AES_NONCE_SIZE) != 1) {
+                fprintf(stderr, "Error: Random number generation failed for metadata nonce\n");
+                secure_zero(file_key, AES_KEY_SIZE);
+                secure_zero(meta_key, AES_KEY_SIZE);
+                if (in) fclose(in);
+                if (out) fclose(out);
+                free(filtered_filenames);
+                return 1;
+            }
+            verbose_print(VERBOSE_DEBUG, "Generated random metadata nonce");
+            FileEntry entry;
+            memcpy(entry.nonce, meta_nonce, AES_NONCE_SIZE);
+            size_t meta_enc_size;
+            if (!dry_run && encrypt_aes_gcm(meta_key, meta_nonce, (uint8_t *)&plain_entry, sizeof(FileEntryPlain),
+                                           entry.encrypted_data, &meta_enc_size, entry.tag) != 0) {
+                fprintf(stderr, "Error: Failed to encrypt metadata for %s\n", filename);
+                secure_zero(file_key, AES_KEY_SIZE);
+                secure_zero(meta_key, AES_KEY_SIZE);
+                if (in) fclose(in);
+                if (out) fclose(out);
+                free(filtered_filenames);
+                return 1;
+            }
+            verbose_print(VERBOSE_DEBUG, "Encrypted metadata");
+            if (!dry_run && fwrite(&entry, sizeof(entry), 1, out) != 1) {
+                fprintf(stderr, "Error: Failed to write metadata for empty file %s\n", filename);
+                secure_zero(file_key, AES_KEY_SIZE);
+                secure_zero(meta_key, AES_KEY_SIZE);
+                if (in) fclose(in);
+                if (out) fclose(out);
+                free(filtered_filenames);
+                return 1;
+            }
+            verbose_print(VERBOSE_BASIC, "Archived empty file: %s (permissions: 0%o)", filename, file_mode);
             if (in) fclose(in);
-            if (out) fclose(out);
-            free(filtered_filenames);
-            return 1;
+            continue;
         }
+        
         if (in_size > MAX_FILE_SIZE) {
             fprintf(stderr, "Error: Input file %s exceeds max size (%llu bytes)\n", filename, MAX_FILE_SIZE);
             secure_zero(file_key, AES_KEY_SIZE);
@@ -249,7 +287,6 @@ int archive_files(const char *output, const char **filenames, int file_count, co
             free(filtered_filenames);
             return 1;
         }
-        verbose_print(VERBOSE_DEBUG, "File size: %lu bytes, mode: 0%o", in_size, file_mode);
         uint8_t *in_buf = dry_run ? NULL : malloc(in_size);
         if (!dry_run && !in_buf) {
             fprintf(stderr, "Error: Memory allocation failed for input buffer\n");

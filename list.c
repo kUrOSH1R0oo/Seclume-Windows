@@ -141,8 +141,7 @@ int list_files(const char *archive, const char *password) {
             return 1;
         }
         if (meta_dec_size != sizeof(FileEntryPlain) || plain_entry.filename[MAX_FILENAME - 1] != '\0' ||
-            has_path_traversal(plain_entry.filename) || plain_entry.compressed_size == 0 ||
-            plain_entry.original_size == 0 || plain_entry.original_size > MAX_FILE_SIZE) {
+            has_path_traversal(plain_entry.filename) || plain_entry.original_size > MAX_FILE_SIZE) {
             fprintf(stderr, "Error: Invalid or unsafe metadata in file entry %u\n", i);
             secure_zero(file_key, AES_KEY_SIZE);
             secure_zero(meta_key, AES_KEY_SIZE);
@@ -152,14 +151,16 @@ int list_files(const char *archive, const char *password) {
         char mode_str[11];
         mode_to_string(plain_entry.mode, mode_str);
         printf("%-11s %12" PRIu64 " %s\n", mode_str, plain_entry.original_size, plain_entry.filename);
-        // Skip file data
-        size_t skip_size = plain_entry.compressed_size + AES_NONCE_SIZE + AES_TAG_SIZE;
-        if (fseek(in, skip_size, SEEK_CUR) != 0) {
-            fprintf(stderr, "Error: Failed to skip file data for entry %u: %s\n", i, strerror(errno));
-            secure_zero(file_key, AES_KEY_SIZE);
-            secure_zero(meta_key, AES_KEY_SIZE);
-            fclose(in);
-            return 1;
+        // Skip file data for non-empty files only
+        if (plain_entry.compressed_size > 0) {
+            size_t skip_size = plain_entry.compressed_size + AES_NONCE_SIZE + AES_TAG_SIZE;
+            if (fseek(in, skip_size, SEEK_CUR) != 0) {
+                fprintf(stderr, "Error: Failed to skip file data for entry %u: %s\n", i, strerror(errno));
+                secure_zero(file_key, AES_KEY_SIZE);
+                secure_zero(meta_key, AES_KEY_SIZE);
+                fclose(in);
+                return 1;
+            }
         }
     }
     secure_zero(file_key, AES_KEY_SIZE);

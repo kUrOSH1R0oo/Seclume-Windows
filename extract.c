@@ -244,6 +244,7 @@ int extract_files(const char *archive, const char *password, int force, const ch
         size_t meta_dec_size;
         if (decrypt_aes_gcm(meta_key, entry.nonce, entry.encrypted_data, sizeof(entry.encrypted_data),
                             entry.tag, (uint8_t *)&plain_entry, &meta_dec_size) != 0) {
+            fprintf(stderr, "Error: Failed to decrypt metadata for file entry %u\n", i);
             free(archive_outdir);
             secure_zero(file_key, AES_KEY_SIZE);
             secure_zero(meta_key, AES_KEY_SIZE);
@@ -251,8 +252,7 @@ int extract_files(const char *archive, const char *password, int force, const ch
             return 1;
         }
         if (meta_dec_size != sizeof(FileEntryPlain) || plain_entry.filename[MAX_FILENAME - 1] != '\0' ||
-            has_path_traversal(plain_entry.filename) || plain_entry.compressed_size == 0 ||
-            plain_entry.original_size == 0 || plain_entry.original_size > MAX_FILE_SIZE) {
+            has_path_traversal(plain_entry.filename) || plain_entry.original_size > MAX_FILE_SIZE) {
             fprintf(stderr, "Error: Invalid or unsafe metadata in file entry %u\n", i);
             free(archive_outdir);
             secure_zero(file_key, AES_KEY_SIZE);
@@ -283,6 +283,36 @@ int extract_files(const char *archive, const char *password, int force, const ch
             secure_zero(meta_key, AES_KEY_SIZE);
             fclose(in);
             return 1;
+        }
+        // Handle empty files
+        if (plain_entry.original_size == 0 && plain_entry.compressed_size == 0) {
+            FILE *out = fopen(output_path, "wb");
+            if (!out) {
+                fprintf(stderr, "Error: Cannot open output file %s: %s\n", output_path, strerror(errno));
+                free(archive_outdir);
+                secure_zero(file_key, AES_KEY_SIZE);
+                secure_zero(meta_key, AES_KEY_SIZE);
+                fclose(in);
+                return 1;
+            }
+            fclose(out);
+#ifdef _WIN32
+            int win_mode = (plain_entry.mode & S_IWUSR) ? _S_IWRITE : _S_IREAD;
+            if (_chmod(output_path, win_mode) != 0) {
+                fprintf(stderr, "Warning: Failed to set permissions on %s: %s\n", output_path, strerror(errno));
+            } else {
+                verbose_print(VERBOSE_DEBUG, "Set basic permissions on %s: %s", output_path,
+                              win_mode == _S_IWRITE ? "read/write" : "read-only");
+            }
+#else
+            if (chmod(output_path, plain_entry.mode) != 0) {
+                fprintf(stderr, "Warning: Failed to set permissions on %s: %s\n", output_path, strerror(errno));
+            } else {
+                verbose_print(VERBOSE_DEBUG, "Restored permissions on %s: 0%o", output_path, plain_entry.mode);
+            }
+#endif
+            verbose_print(VERBOSE_BASIC, "Extracted empty file: %s", output_path);
+            continue;
         }
         uint8_t file_nonce[AES_NONCE_SIZE];
         uint8_t file_tag[AES_TAG_SIZE];

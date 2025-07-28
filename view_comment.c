@@ -30,12 +30,12 @@ int view_comment(const char *archive, const char *password) {
         fclose(in);
         return 1;
     }
-    if (strncmp(header.magic, "SLM", 4) != 0 || (header.version < 4 || header.version > 5)) {
-        fprintf(stderr, "Error: Invalid archive format or version (expected 4 or 5, got %d)\n", header.version);
+    if (strncmp(header.magic, "SLM", 4) != 0 || header.version < 4 || header.version > 6) {
+        fprintf(stderr, "Error: Invalid archive format or version (expected 4-6, got %d)\n", header.version);
         fclose(in);
         return 1;
     }
-    if (header.version == 5 && header.compression_algo != COMPRESSION_ZLIB && header.compression_algo != COMPRESSION_LZMA) {
+    if (header.version >= 5 && header.compression_algo != COMPRESSION_ZLIB && header.compression_algo != COMPRESSION_LZMA) {
         fprintf(stderr, "Error: Invalid compression algorithm in header (%d)\n", header.compression_algo);
         fclose(in);
         return 1;
